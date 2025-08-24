@@ -3,6 +3,7 @@
 Application Screenshot Discord Bot
 Takes screenshots of a specific application and sends them to Discord webhook
 Interactive configuration menu with GUI option
+Enhanced with customizable messages and persistent configuration
 """
 
 import os
@@ -11,8 +12,9 @@ import requests
 from datetime import datetime
 import sys
 import threading
+import json
 
-# Platform-specific imports
+
 try:
     import pyautogui
     import psutil
@@ -21,7 +23,7 @@ except ImportError as e:
     print("Install with: pip install pyautogui psutil")
     sys.exit(1)
 
-# GUI imports (optional)
+
 try:
     import tkinter as tk
     from tkinter import ttk, messagebox, scrolledtext
@@ -29,7 +31,7 @@ try:
 except ImportError:
     GUI_AVAILABLE = False
 
-# Windows-specific imports
+
 if sys.platform == "win32":
     try:
         import pygetwindow as gw
@@ -42,7 +44,7 @@ if sys.platform == "win32":
         print("Install with: pip install pygetwindow pywin32 Pillow")
         sys.exit(1)
 
-# macOS-specific imports
+
 elif sys.platform == "darwin":
     try:
         from AppKit import NSWorkspace, NSApplicationActivationPolicyRegular
@@ -53,7 +55,7 @@ elif sys.platform == "darwin":
         print("Install with: pip install pyobjc Pillow")
         sys.exit(1)
 
-# Linux-specific imports
+
 else:
     try:
         import subprocess
@@ -63,16 +65,129 @@ else:
         print("Install with: pip install Pillow")
         sys.exit(1)
 
+class ToggleSwitch(tk.Canvas):
+    """
+    A custom tkinter widget that acts as a sliding toggle switch with rounded edges.
+    """
+    def __init__(self, master, on_command=None, off_command=None, **kwargs):
+        super().__init__(master, width=50, height=26, highlightthickness=0, **kwargs)
+        self.on_color = '#22c55e'
+        self.off_color = '#6b7280'
+        self.toggle_color = '#ffffff'
+        self.state = False
+        self.on_command = on_command
+        self.off_command = off_command
+        
+        self.bind('<Button-1>', self.toggle)
+        self.draw_toggle()
+
+    def draw_toggle(self):
+        """Draws the toggle switch based on its current state."""
+        self.delete('all')
+        bg_color = self.on_color if self.state else self.off_color
+        
+        # Draw the rounded rectangle background
+        self.create_oval(2, 2, 24, 24, fill=bg_color, outline=bg_color)
+        self.create_oval(26, 2, 48, 24, fill=bg_color, outline=bg_color)
+        self.create_rectangle(12, 2, 38, 24, fill=bg_color, outline=bg_color)
+        
+        # Draw the knob as a perfect circle
+        if self.state:
+            self.create_oval(28, 2, 48, 24, fill=self.toggle_color, outline=self.toggle_color)
+        else:
+            self.create_oval(2, 2, 22, 24, fill=self.toggle_color, outline=self.toggle_color)
+
+    def toggle(self, event=None):
+        """Toggles the state of the switch and executes the corresponding command."""
+        self.state = not self.state
+        self.draw_toggle()
+        if self.state and self.on_command:
+            self.on_command()
+        elif not self.state and self.off_command:
+            self.off_command()
+
 
 class ApplicationScreenshotter:
     def __init__(self):
+        self.config_file = "cfg.json"
         self.webhook_url = ""
         self.app_name = ""
         self.interval = 60
         self.delete_after_send = True
+        self.custom_message = "Screenshot of {app_name} - {timestamp}"
         self.running = False
         self.monitor_thread = None
         
+        
+    def load_config(self):
+        """Load configuration from JSON file"""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    config = json.load(f)
+                    self.webhook_url = config.get('webhook_url', '')
+                    self.app_name = config.get('app_name', '')
+                    self.interval = config.get('interval', 60)
+                    self.delete_after_send = config.get('delete_after_send', True)
+                    self.custom_message = config.get('custom_message', 'Screenshot of {app_name} - {timestamp}')
+                return True # Config loaded
+            else:
+                self.create_default_config()
+                return False # Config file not found
+        except Exception as e:
+            print(f"Error loading config: {e}")
+            self.create_default_config()
+            return False # Error, so created default config
+            
+    def create_default_config(self):
+        """Create a default configuration file"""
+        try:
+            config = {
+                'webhook_url': self.webhook_url,
+                'app_name': self.app_name,
+                'interval': self.interval,
+                'delete_after_send': self.delete_after_send,
+                'custom_message': self.custom_message
+            }
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            print(f"Error creating default config: {e}")
+            
+    def save_config(self):
+        """Save configuration to JSON file"""
+        try:
+            config = {
+                'webhook_url': self.webhook_url,
+                'app_name': self.app_name,
+                'interval': self.interval,
+                'delete_after_send': self.delete_after_send,
+                'custom_message': self.custom_message
+            }
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            print(f"Error saving config: {e}")
+    
+    def format_message(self):
+        """Format the custom message with available variables"""
+        variables = {
+            'app_name': self.app_name,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'date': datetime.now().strftime("%Y-%m-%d"),
+            'time': datetime.now().strftime("%H:%M:%S"),
+            'day': datetime.now().strftime("%A"),
+            'month': datetime.now().strftime("%B"),
+            'year': datetime.now().strftime("%Y")
+        }
+        
+        try:
+            return self.custom_message.format(**variables)
+        except KeyError as e:
+            return f"Error in message format: Unknown variable {e}"
+        except Exception as e:
+            return f"Error formatting message: {e}"
+    
     def find_application_window(self):
         """Find the application window based on platform"""
         if sys.platform == "win32":
@@ -85,7 +200,7 @@ class ApplicationScreenshotter:
     def _find_window_windows(self):
         """Find application window on Windows"""
         try:
-            # First try to find by window title
+            
             windows = gw.getAllWindows()
             matching_windows = []
             
@@ -97,23 +212,23 @@ class ApplicationScreenshotter:
                     matching_windows.append(window)
             
             if matching_windows:
-                # Prefer non-minimized windows
+                
                 for window in matching_windows:
                     if not window.isMinimized:
                         return window
-                return matching_windows[0]  # Return first match if all are minimized
+                return matching_windows[0]  
             
-            # If no window title match, try by process name
+            
             for proc in psutil.process_iter(['name', 'pid']):
                 try:
                     proc_name = proc.info['name'].lower()
                     if self.app_name in proc_name or proc_name.replace('.exe', '') == self.app_name:
-                        # Find window associated with this process
+                        
                         def enum_windows_callback(hwnd, pid):
                             if win32gui.GetWindowThreadProcessId(hwnd)[1] == pid:
                                 window_title = win32gui.GetWindowText(hwnd)
                                 if window_title and win32gui.IsWindowVisible(hwnd):
-                                    # Create a window-like object
+                                    
                                     rect = win32gui.GetWindowRect(hwnd)
                                     class WindowObj:
                                         def __init__(self, hwnd, title, rect):
@@ -138,7 +253,7 @@ class ApplicationScreenshotter:
                                     return WindowObj(hwnd, window_title, rect)
                             return None
                         
-                        # Try to find window for this process
+                        
                         def callback(hwnd, pid):
                             result = enum_windows_callback(hwnd, pid)
                             if result:
@@ -201,7 +316,7 @@ class ApplicationScreenshotter:
                     if name and not name.endswith('.exe'):
                         apps.add(name)
                     elif name and name.endswith('.exe'):
-                        apps.add(name[:-4])  # Remove .exe extension
+                        apps.add(name[:-4])  
                 except:
                     pass
                     
@@ -214,7 +329,7 @@ class ApplicationScreenshotter:
             except:
                 pass
                 
-        else:  # Linux
+        else:  
             for proc in psutil.process_iter(['name']):
                 try:
                     apps.add(proc.info['name'])
@@ -229,7 +344,7 @@ class ApplicationScreenshotter:
         if not window:
             return None, f"Application '{self.app_name}' not found or not running"
         
-        # Create screenshots folder if it doesn't exist
+        
         screenshots_dir = "screenshots"
         if not os.path.exists(screenshots_dir):
             os.makedirs(screenshots_dir)
@@ -250,36 +365,36 @@ class ApplicationScreenshotter:
     def _screenshot_windows(self, window, filename):
         """Take screenshot on Windows"""
         try:
-            # Method 1: Try to use window handle for direct capture
+            
             try:
                 hwnd = win32gui.FindWindow(None, window.title)
                 if hwnd:
-                    # Get window dimensions
+                    
                     rect = win32gui.GetWindowRect(hwnd)
                     left, top, right, bottom = rect
                     width = right - left
                     height = bottom - top
                     
-                    # Bring window to front
+                    
                     win32gui.SetForegroundWindow(hwnd)
                     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                    time.sleep(1)  # Wait longer for window to come to front
+                    time.sleep(1)  
                     
-                    # Create device context
+                    
                     hwndDC = win32gui.GetWindowDC(hwnd)
                     mfcDC = win32ui.CreateDCFromHandle(hwndDC)
                     saveDC = mfcDC.CreateCompatibleDC()
                     
-                    # Create bitmap
+                    
                     saveBitMap = win32ui.CreateBitmap()
                     saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
                     saveDC.SelectObject(saveBitMap)
                     
-                    # Copy window content
+                    
                     result = saveDC.BitBlt((0, 0), (width, height), mfcDC, (0, 0), win32con.SRCCOPY)
                     
                     if result:
-                        # Convert to PIL Image
+                        
                         bmpinfo = saveBitMap.GetInfo()
                         bmpstr = saveBitMap.GetBitmapBits(True)
                         
@@ -288,17 +403,17 @@ class ApplicationScreenshotter:
                             (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
                             bmpstr, 'raw', 'BGRX', 0, 1)
                         
-                        # Clean up
+                        
                         win32gui.DeleteObject(saveBitMap.GetHandle())
                         saveDC.DeleteDC()
                         mfcDC.DeleteDC()
                         win32gui.ReleaseDC(hwnd, hwndDC)
                         
-                        # Save image
+                        
                         img.save(filename)
                         return filename, "✓ Used direct window capture method"
                     
-                    # Clean up if failed
+                    
                     win32gui.DeleteObject(saveBitMap.GetHandle())
                     saveDC.DeleteDC()
                     mfcDC.DeleteDC()
@@ -307,23 +422,23 @@ class ApplicationScreenshotter:
             except Exception as e:
                 pass
             
-            # Method 2: Fallback to screen region capture
+            
             if window.isMinimized:
                 window.restore()
             window.activate()
-            time.sleep(1.5)  # Longer wait
+            time.sleep(1.5)  
             
-            # Ensure window is visible and get updated position
+            
             left, top, width, height = window.left, window.top, window.width, window.height
             
-            # Check if coordinates make sense
+            
             if width <= 0 or height <= 0:
                 screenshot = pyautogui.screenshot()
             else:
-                # Add small margin to avoid window borders
+                
                 margin = 8
                 left += margin
-                top += margin + 30  # Account for title bar
+                top += margin + 30  
                 width -= margin * 2
                 height -= margin * 2 + 30
                 
@@ -341,13 +456,13 @@ class ApplicationScreenshotter:
     def _screenshot_macos(self, app, filename):
         """Take screenshot on macOS"""
         try:
-            # Activate the application and wait
+            
             app.activateWithOptions_(NSApplicationActivationPolicyRegular)
             time.sleep(1.5)
             
-            # Method 1: Try to get specific window bounds
+            
             try:
-                # Get all windows for this app
+                
                 options = Quartz.kCGWindowListOptionOnScreenOnly
                 window_list = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID)
                 
@@ -369,7 +484,7 @@ class ApplicationScreenshotter:
             except Exception as e:
                 pass
             
-            # Method 2: Fallback to full screen
+            
             screenshot = pyautogui.screenshot()
             screenshot.save(filename)
             return filename, "✓ Used full screen capture method"
@@ -380,7 +495,7 @@ class ApplicationScreenshotter:
     def _screenshot_linux(self, window_id, filename):
         """Take screenshot on Linux"""
         try:
-            # Method 1: Try using import with window ID
+            
             try:
                 subprocess.run(['xdotool', 'windowactivate', window_id], check=True)
                 time.sleep(1)
@@ -391,7 +506,7 @@ class ApplicationScreenshotter:
             except subprocess.CalledProcessError:
                 pass
             
-            # Method 2: Try using scrot with window focus
+            
             try:
                 subprocess.run(['xdotool', 'windowactivate', window_id], check=True)
                 time.sleep(1)
@@ -401,7 +516,7 @@ class ApplicationScreenshotter:
             except (subprocess.CalledProcessError, FileNotFoundError):
                 pass
             
-            # Method 3: Fallback to gnome-screenshot or full screen
+            
             try:
                 subprocess.run(['gnome-screenshot', '-w', '-f', filename], check=True)
                 if os.path.exists(filename):
@@ -409,7 +524,7 @@ class ApplicationScreenshotter:
             except (subprocess.CalledProcessError, FileNotFoundError):
                 pass
             
-            # Method 4: Final fallback - take full screenshot with pyautogui
+            
             screenshot = pyautogui.screenshot()
             screenshot.save(filename)
             return filename, "✓ Used full screen capture method"
@@ -418,13 +533,17 @@ class ApplicationScreenshotter:
             return None, f"Error in Linux screenshot: {e}"
     
     def send_to_discord(self, filename):
-        """Send screenshot to Discord webhook"""
+        """Send screenshot to Discord webhook with custom message"""
         try:
             with open(filename, 'rb') as file:
                 files = {'file': (filename, file, 'image/png')}
-                data = {
-                    'content': f'Screenshot of {self.app_name} - {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
-                }
+                
+                
+                content = self.format_message() if self.custom_message.strip() else None
+                
+                data = {}
+                if content:
+                    data['content'] = content
                 
                 response = requests.post(self.webhook_url, data=data, files=files)
                 
@@ -482,7 +601,7 @@ class ApplicationScreenshotter:
         while self.running:
             self.take_single_screenshot()
             
-            # Sleep in small increments so we can stop quickly
+            
             for _ in range(self.interval):
                 if not self.running:
                     break
@@ -502,13 +621,14 @@ class ApplicationScreenshotter:
 class ScreenshotBotGUI:
     def __init__(self):
         self.bot = ApplicationScreenshotter()
+        self.config_found = self.bot.load_config()
         self.root = tk.Tk()
         self.root.title("Screenshot Discord Bot")
-        self.root.geometry("800x900")
+        self.root.geometry("1300x900")
         self.root.resizable(True, True)
         self.root.configure(bg='#1e1e1e')
         
-        # Animation variables
+        
         self.fade_alpha = 0.0
         self.pulse_scale = 1.0
         self.pulse_direction = 1
@@ -519,35 +639,44 @@ class ScreenshotBotGUI:
             'info': '#3b82f6'
         }
         
-        # Configure ttk styles for dark theme
+        
         self.setup_styles()
         
-        # Create animated header
+        
         self.create_animated_header()
         
         self.create_widgets()
         self.update_status()
         
-        # Start animation loops
+        
         self.root.after(50, self.animate_pulse)
         self.root.after(100, self.update_status_loop)
         self.animate_fade_in()
+        
+        
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+    
+    def on_closing(self):
+        """Handle window closing - save config and stop monitoring"""
+        if self.bot.running:
+            self.bot.stop_monitoring()
+        self.root.destroy()
     
     def setup_styles(self):
         """Setup dark theme styles with modern look"""
         style = ttk.Style()
         
-        # Configure dark theme
+        
         style.theme_use('clam')
         
-        # Main colors
+        
         bg_color = '#1e1e1e'
         card_color = '#2d2d2d'
         accent_color = '#3b82f6'
         text_color = '#ffffff'
         secondary_text = '#a1a1aa'
         
-        # Configure styles
+        
         style.configure('Title.TLabel', 
                        background=bg_color, 
                        foreground=text_color,
@@ -611,17 +740,17 @@ class ScreenshotBotGUI:
         self.header_frame.pack(fill=tk.X, pady=(0, 20))
         self.header_frame.pack_propagate(False)
         
-        # Animated title
+        
         self.title_label = tk.Label(
             self.header_frame,
-            text="📸 Screenshot Discord Bot",
+            text="Screenshot Discord Bot",
             font=('Segoe UI', 28, 'bold'),
             fg='#3b82f6',
             bg='#1e1e1e'
         )
         self.title_label.pack(expand=True)
         
-        # Subtitle with typewriter effect
+        
         self.subtitle_label = tk.Label(
             self.header_frame,
             text="",
@@ -631,8 +760,8 @@ class ScreenshotBotGUI:
         )
         self.subtitle_label.pack()
         
-        # Start typewriter animation
-        self.typewriter_text = "wraith stinks btw"
+        
+        self.typewriter_text = "Automated screenshot capture and Discord integration"
         self.typewriter_index = 0
         self.root.after(2000, self.animate_typewriter)
     
@@ -647,7 +776,7 @@ class ScreenshotBotGUI:
         """Animate window fade in effect"""
         if self.fade_alpha < 1.0:
             self.fade_alpha += 0.05
-            # Simulate fade by adjusting widget states
+            
             self.root.after(30, self.animate_fade_in)
     
     def animate_pulse(self):
@@ -659,196 +788,336 @@ class ScreenshotBotGUI:
             elif self.pulse_scale <= 0.9:
                 self.pulse_direction = 1
             
-            # Update status indicator with pulse effect
+            
             pulse_size = int(12 * self.pulse_scale)
             self.status_indicator.config(font=('Segoe UI', pulse_size, 'bold'))
         
         self.root.after(50, self.animate_pulse)
     
     def create_widgets(self):
-        # Main container with padding
-        main_container = tk.Frame(self.root, bg='#1e1e1e')
-        main_container.pack(fill=tk.BOTH, expand=True, padx=30, pady=20)
+        """Create all GUI widgets including scrollable content area."""
         
-        # Configuration Card
-        config_card = self.create_card(main_container, "⚙️ Configuration")
+        self.canvas = tk.Canvas(self.root, bg='#1e1e1e', highlightthickness=0)
+        self.scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = tk.Frame(self.canvas, bg='#1e1e1e')
+        
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(30, 0), pady=(20, 20))
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 30), pady=(20, 20))
+        
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        
+        self.scrollable_frame.bind("<Configure>", 
+                                   lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+        # Left and Right split
+        left_frame = tk.Frame(self.scrollable_frame, bg='#1e1e1e')
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 15))
+
+        self.right_frame = tk.Frame(self.scrollable_frame, bg='#1e1e1e', width=350)
+        # Note: self.right_frame is not expanded vertically to prevent stretching
+        self.right_frame.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Left side cards
+        config_card = self.create_card(left_frame, "Configuration")
         config_card.pack(fill=tk.X, pady=(0, 20))
         
-        # Webhook URL section
-        webhook_section = tk.Frame(config_card, bg='#2d2d2d')
-        webhook_section.pack(fill=tk.X, padx=20, pady=10)
-        
-        webhook_label = tk.Label(webhook_section, text="Discord Webhook URL",
-                                font=('Segoe UI', 11, 'bold'), fg='#ffffff', bg='#2d2d2d')
+        # Webhook URL
+        webhook_frame = tk.Frame(config_card, bg='#2d2d2d')
+        webhook_frame.pack(fill=tk.X, padx=20, pady=(20, 10))
+        webhook_label = tk.Label(webhook_frame, text="Discord Webhook URL", 
+                                font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#2d2d2d')
         webhook_label.pack(anchor=tk.W)
-        
-        webhook_desc = tk.Label(webhook_section, text="Enter your Discord webhook URL to send screenshots",
-                               font=('Segoe UI', 9), fg='#a1a1aa', bg='#2d2d2d')
-        webhook_desc.pack(anchor=tk.W, pady=(0, 5))
-        
-        self.webhook_var = tk.StringVar()
-        self.webhook_entry = tk.Entry(webhook_section, textvariable=self.webhook_var,
-                                     font=('Segoe UI', 10), bg='#374151', fg='#ffffff',
-                                     bd=0, highlightthickness=1, highlightcolor='#3b82f6',
-                                     insertbackground='#ffffff')
-        self.webhook_entry.pack(fill=tk.X, ipady=8)
-        self.webhook_entry.bind('<FocusIn>', lambda e: self.animate_entry_focus(e.widget, True))
-        self.webhook_entry.bind('<FocusOut>', lambda e: self.animate_entry_focus(e.widget, False))
-        
-        # Application section
-        app_section = tk.Frame(config_card, bg='#2d2d2d')
-        app_section.pack(fill=tk.X, padx=20, pady=10)
-        
-        app_label = tk.Label(app_section, text="Target Application",
-                            font=('Segoe UI', 11, 'bold'), fg='#ffffff', bg='#2d2d2d')
+        webhook_desc = tk.Label(webhook_frame, text="Enter your Discord webhook URL to send screenshots",
+                                font=('Segoe UI', 8), fg='#a1a1aa', bg='#2d2d2d')
+        webhook_desc.pack(anchor=tk.W)
+        self.webhook_var = tk.StringVar(value=self.bot.webhook_url)
+        webhook_entry = ttk.Entry(webhook_frame, textvariable=self.webhook_var, style='Modern.TEntry')
+        webhook_entry.pack(fill=tk.X, ipady=5, pady=(5, 0))
+
+        # Application Name
+        app_frame = tk.Frame(config_card, bg='#2d2d2d')
+        app_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
+        app_label = tk.Label(app_frame, text="Application Name", 
+                            font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#2d2d2d')
         app_label.pack(anchor=tk.W)
+        app_desc = tk.Label(app_frame, text="Choose which application to screenshot",
+                            font=('Segoe UI', 8), fg='#a1a1aa', bg='#2d2d2d')
+        app_desc.pack(anchor=tk.W)
+        self.app_var = tk.StringVar(value=self.bot.app_name)
         
-        app_desc = tk.Label(app_section, text="Choose which application to screenshot",
-                           font=('Segoe UI', 9), fg='#a1a1aa', bg='#2d2d2d')
-        app_desc.pack(anchor=tk.W, pady=(0, 5))
+        app_entry_frame = tk.Frame(app_frame, bg='#2d2d2d')
+        app_entry_frame.pack(fill=tk.X, pady=(5,0))
         
-        app_input_frame = tk.Frame(app_section, bg='#2d2d2d')
-        app_input_frame.pack(fill=tk.X)
+        app_entry = ttk.Entry(app_entry_frame, textvariable=self.app_var, style='Modern.TEntry')
+        app_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
+        app_btn = tk.Button(app_entry_frame, text="Browse", font=('Segoe UI', 9, 'bold'),
+                            bg='#6b7280', fg='white', bd=0, padx=10, pady=5,
+                            cursor='hand2', command=self.show_applications)
+        app_btn.pack(side=tk.LEFT, padx=(5, 0))
+
+
+        # Custom Message
+        message_frame = tk.Frame(config_card, bg='#2d2d2d')
+        message_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
         
-        self.app_var = tk.StringVar()
-        self.app_entry = tk.Entry(app_input_frame, textvariable=self.app_var,
-                                 font=('Segoe UI', 10), bg='#374151', fg='#ffffff',
-                                 bd=0, highlightthickness=1, highlightcolor='#3b82f6',
-                                 insertbackground='#ffffff')
-        self.app_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8)
-        self.app_entry.bind('<FocusIn>', lambda e: self.animate_entry_focus(e.widget, True))
-        self.app_entry.bind('<FocusOut>', lambda e: self.animate_entry_focus(e.widget, False))
+        message_label = tk.Label(message_frame, text="Custom Message", 
+                                font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#2d2d2d')
+        message_label.pack(anchor=tk.W)
         
-        self.browse_btn = tk.Button(app_input_frame, text="🔍 Browse",
-                                   font=('Segoe UI', 9, 'bold'), bg='#6366f1', fg='white',
-                                   bd=0, padx=15, pady=8, cursor='hand2',
-                                   command=self.show_applications)
-        self.browse_btn.pack(side=tk.RIGHT, padx=(10, 0))
-        self.browse_btn.bind('<Enter>', lambda e: self.animate_button_hover(e.widget, True))
-        self.browse_btn.bind('<Leave>', lambda e: self.animate_button_hover(e.widget, False))
+        message_desc = tk.Label(message_frame, text="customize the message sent with screenshots. Leave empty for only image",
+                                font=('Segoe UI', 8), fg='#a1a1aa', bg='#2d2d2d')
+        message_desc.pack(anchor=tk.W)
         
-        # Settings section
-        settings_section = tk.Frame(config_card, bg='#2d2d2d')
-        settings_section.pack(fill=tk.X, padx=20, pady=10)
+        # Frame to hold entry and help button together
+        entry_help_frame = tk.Frame(message_frame, bg='#2d2d2d')
+        entry_help_frame.pack(fill=tk.X, pady=(5, 0))
         
-        settings_row = tk.Frame(settings_section, bg='#2d2d2d')
-        settings_row.pack(fill=tk.X)
+        self.message_var = tk.StringVar(value=self.bot.custom_message)
+        message_entry = ttk.Entry(entry_help_frame, textvariable=self.message_var, style='Modern.TEntry')
+        message_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
         
-        # Interval setting
-        interval_frame = tk.Frame(settings_row, bg='#2d2d2d')
+        message_help_btn = tk.Button(entry_help_frame, text="?", font=('Segoe UI', 8, 'bold'),
+                                     bg='#374151', fg='#ffffff', bd=0, width=2,
+                                     cursor='hand2', command=self.show_message_help)
+        message_help_btn.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.message_preview = tk.Label(message_frame, text="", 
+                                       font=('Segoe UI', 8, 'italic'), fg='#4ade80', bg='#2d2d2d')
+        self.message_preview.pack(anchor=tk.W, pady=(5, 0))
+        self.message_var.trace('w', self.update_message_preview)
+        self.update_message_preview()
+        
+        # Interval & Delete after send
+        options_frame = tk.Frame(config_card, bg='#2d2d2d')
+        options_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
+        
+        interval_frame = tk.Frame(options_frame, bg='#2d2d2d')
         interval_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        
-        interval_label = tk.Label(interval_frame, text="Interval (seconds)",
-                                 font=('Segoe UI', 11, 'bold'), fg='#ffffff', bg='#2d2d2d')
+        interval_label = tk.Label(interval_frame, text="Interval (seconds):", 
+                                font=('Segoe UI', 10), fg='#ffffff', bg='#2d2d2d')
         interval_label.pack(anchor=tk.W)
+        self.interval_var = tk.StringVar(value=str(self.bot.interval))
+        interval_entry = ttk.Entry(interval_frame, textvariable=self.interval_var, style='Modern.TEntry')
+        interval_entry.pack(fill=tk.X, ipady=5, pady=(5, 0))
         
-        self.interval_var = tk.StringVar(value="60")
-        self.interval_entry = tk.Entry(interval_frame, textvariable=self.interval_var,
-                                      font=('Segoe UI', 10), bg='#374151', fg='#ffffff',
-                                      bd=0, highlightthickness=1, highlightcolor='#3b82f6',
-                                      insertbackground='#ffffff', width=10)
-        self.interval_entry.pack(anchor=tk.W, ipady=8, pady=(5, 0))
-        self.interval_entry.bind('<FocusIn>', lambda e: self.animate_entry_focus(e.widget, True))
-        self.interval_entry.bind('<FocusOut>', lambda e: self.animate_entry_focus(e.widget, False))
+        # New Toggle Switch for Delete After Send
+        toggle_frame = tk.Frame(options_frame, bg='#2d2d2d')
+        toggle_frame.pack(side=tk.RIGHT, padx=(10, 0), pady=(15, 0))
+        toggle_label = tk.Label(toggle_frame, text="Delete after send:",
+                                font=('Segoe UI', 10), fg='#ffffff', bg='#2d2d2d')
+        toggle_label.pack(side=tk.LEFT, padx=(0, 5))
+        self.delete_var = tk.BooleanVar(value=self.bot.delete_after_send)
+        self.delete_toggle = ToggleSwitch(
+            toggle_frame, 
+            bg='#2d2d2d', 
+            on_command=lambda: self.delete_var.set(True), 
+            off_command=lambda: self.delete_var.set(False)
+        )
+        self.delete_toggle.pack(side=tk.LEFT)
+        if self.bot.delete_after_send:
+            self.delete_toggle.state = True
+            self.delete_toggle.draw_toggle()
+            
+        # Save Configuration Button
+        save_frame = tk.Frame(config_card, bg='#2d2d2d')
+        save_frame.pack(fill=tk.X, padx=20, pady=(10, 20))
         
-        # Delete checkbox with modern styling
-        delete_frame = tk.Frame(settings_row, bg='#2d2d2d')
-        delete_frame.pack(side=tk.RIGHT, padx=(20, 0))
-        
-        self.delete_var = tk.BooleanVar(value=True)
-        delete_check_frame = tk.Frame(delete_frame, bg='#2d2d2d')
-        delete_check_frame.pack(pady=(25, 0))
-        
-        self.delete_checkbox = tk.Checkbutton(delete_check_frame, text="🗑️ Auto-delete screenshots",
-                                             variable=self.delete_var, font=('Segoe UI', 10),
-                                             fg='#ffffff', bg='#2d2d2d', selectcolor='#3b82f6',
-                                             activebackground='#2d2d2d', activeforeground='#ffffff',
-                                             bd=0, highlightthickness=0)
-        self.delete_checkbox.pack()
-        
-        # Action Card
-        action_card = self.create_card(main_container, "🚀 Actions")
+        self.save_btn = tk.Button(save_frame, text="Save Configuration",
+                                  font=('Segoe UI', 11, 'bold'), bg='#6366f1', fg='white',
+                                  bd=0, padx=20, pady=10, cursor='hand2',
+                                  command=self.save_config_animated)
+        self.save_btn.pack(expand=True)
+
+
+        # Actions Card
+        action_card = self.create_card(left_frame, "Actions")
         action_card.pack(fill=tk.X, pady=(0, 20))
         
-        action_buttons_frame = tk.Frame(action_card, bg='#2d2d2d')
-        action_buttons_frame.pack(fill=tk.X, padx=20, pady=20)
+        btn_frame = tk.Frame(action_card, bg='#2d2d2d', padx=20, pady=20)
+        btn_frame.pack(fill=tk.X)
         
-        # Modern gradient buttons
-        btn_style = {
-            'font': ('Segoe UI', 11, 'bold'),
-            'bd': 0,
-            'padx': 25,
-            'pady': 12,
-            'cursor': 'hand2'
-        }
+        self.screenshot_btn = tk.Button(btn_frame, text="Take Screenshot",
+                                        font=('Segoe UI', 11, 'bold'), bg='#3b82f6', fg='white',
+                                        bd=0, padx=20, pady=10, cursor='hand2',
+                                        command=self.take_screenshot_animated)
+        self.screenshot_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         
-        self.screenshot_btn = tk.Button(action_buttons_frame, text="📸 Take Screenshot",
-                                       bg='#3b82f6', fg='white', **btn_style,
-                                       command=self.take_screenshot_animated)
-        self.screenshot_btn.pack(side=tk.LEFT, padx=(0, 10))
-        self.screenshot_btn.bind('<Enter>', lambda e: self.animate_button_hover(e.widget, True))
-        self.screenshot_btn.bind('<Leave>', lambda e: self.animate_button_hover(e.widget, False))
+        self.start_btn = tk.Button(btn_frame, text="Start Monitoring",
+                                    font=('Segoe UI', 11, 'bold'), bg='#22c55e', fg='white',
+                                    bd=0, padx=20, pady=10, cursor='hand2',
+                                    command=self.start_monitoring_animated)
+        self.start_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
         
-        self.start_btn = tk.Button(action_buttons_frame, text="▶️ Start Monitoring",
-                                  bg='#22c55e', fg='white', **btn_style,
-                                  command=self.start_monitoring_animated)
-        self.start_btn.pack(side=tk.LEFT, padx=(0, 10))
-        self.start_btn.bind('<Enter>', lambda e: self.animate_button_hover(e.widget, True))
-        self.start_btn.bind('<Leave>', lambda e: self.animate_button_hover(e.widget, False))
-        
-        self.stop_btn = tk.Button(action_buttons_frame, text="⏹️ Stop Monitoring",
-                                 bg='#ef4444', fg='white', **btn_style,
-                                 command=self.stop_monitoring_animated)
-        self.stop_btn.pack(side=tk.LEFT)
-        self.stop_btn.bind('<Enter>', lambda e: self.animate_button_hover(e.widget, True))
-        self.stop_btn.bind('<Leave>', lambda e: self.animate_button_hover(e.widget, False))
-        
-        # Status Card with animated indicator
-        status_card = self.create_card(main_container, "📊 Status & Activity")
-        status_card.pack(fill=tk.BOTH, expand=True)
-        
-        # Status header with animated indicator
-        status_header = tk.Frame(status_card, bg='#2d2d2d')
+        self.stop_btn = tk.Button(btn_frame, text="Stop Monitoring",
+                                   font=('Segoe UI', 11, 'bold'), bg='#ef4444', fg='white',
+                                   bd=0, padx=20, pady=10, cursor='hand2', state='disabled',
+                                   command=self.stop_monitoring_animated)
+        self.stop_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+
+        # Show Console Toggle
+        console_toggle_frame = tk.Frame(action_card, bg='#2d2d2d')
+        console_toggle_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
+        console_label = tk.Label(console_toggle_frame, text="Show Status Log:",
+                                font=('Segoe UI', 10), fg='#ffffff', bg='#2d2d2d')
+        console_label.pack(side=tk.LEFT, padx=(0, 5))
+        self.show_console_var = tk.BooleanVar(value=True)
+        self.show_console_toggle = ToggleSwitch(
+            console_toggle_frame,
+            bg='#2d2d2d',
+            on_command=self.show_console,
+            off_command=self.hide_console
+        )
+        self.show_console_toggle.pack(side=tk.LEFT)
+        self.show_console_toggle.state = True
+        self.show_console_toggle.draw_toggle()
+
+        # Right side: Status & Activity
+        self.status_card = self.create_card(self.right_frame, "Status & Activity")
+        self.status_card.pack(fill=tk.BOTH, expand=True)
+
+        status_header = tk.Frame(self.status_card, bg='#2d2d2d')
         status_header.pack(fill=tk.X, padx=20, pady=(10, 0))
-        
+
         self.status_indicator = tk.Label(status_header, text="●", font=('Segoe UI', 12, 'bold'),
                                         fg='#ef4444', bg='#2d2d2d')
         self.status_indicator.pack(side=tk.LEFT)
-        
+
         self.status_text_label = tk.Label(status_header, text="Stopped", font=('Segoe UI', 11, 'bold'),
                                          fg='#ffffff', bg='#2d2d2d')
         self.status_text_label.pack(side=tk.LEFT, padx=(5, 0))
-        
-        # Activity log with modern styling
-        log_frame = tk.Frame(status_card, bg='#2d2d2d')
+
+        log_frame = tk.Frame(self.status_card, bg='#2d2d2d')
         log_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(10, 20))
-        
-        # Custom styled text widget
+
         self.status_text = tk.Text(log_frame, font=('Consolas', 9), bg='#1a1a1a',
                                   fg='#e5e5e5', bd=0, padx=15, pady=10,
                                   insertbackground='#3b82f6', selectbackground='#374151')
-        
-        # Scrollbar with modern styling
+
         scrollbar = tk.Scrollbar(log_frame, bg='#374151', troughcolor='#2d2d2d',
                                 borderwidth=0, highlightthickness=0)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
+
         self.status_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.status_text.config(yscrollcommand=scrollbar.set)
         scrollbar.config(command=self.status_text.yview)
-        
-        # Configure text tags for colored output
+
         self.status_text.tag_configure("success", foreground="#4ade80")
         self.status_text.tag_configure("error", foreground="#ef4444")
         self.status_text.tag_configure("warning", foreground="#f59e0b")
         self.status_text.tag_configure("info", foreground="#3b82f6")
         self.status_text.tag_configure("timestamp", foreground="#6b7280")
     
+    def _on_mousewheel(self, event):
+        """Handles mousewheel scrolling for the canvas."""
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+    def show_console(self):
+        """Show the status and activity log frame and resize the window."""
+        self.right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(15, 0))
+        current_height = self.root.winfo_height()
+        self.root.geometry(f"1100x{current_height}")
+    
+    def hide_console(self):
+        """Hide the status and activity log frame and resize the window."""
+        self.right_frame.pack_forget()
+        current_height = self.root.winfo_height()
+        self.root.geometry(f"700x{current_height}")
+    
+    def show_message_help(self):
+        """Show help dialog for message variables"""
+        help_window = tk.Toplevel(self.root)
+        help_window.title("Message Variables Help")
+        help_window.geometry("600x500")
+        help_window.configure(bg='#1e1e1e')
+        help_window.resizable(False, False)
+        help_window.transient(self.root)
+        help_window.grab_set()
+        
+        
+        header = tk.Frame(help_window, bg='#374151', height=60)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        
+        title = tk.Label(header, text="Available Message Variables",
+                        font=('Segoe UI', 16, 'bold'), fg='#ffffff', bg='#374151')
+        title.pack(expand=True)
+        
+        
+        content_frame = tk.Frame(help_window, bg='#1e1e1e')
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        help_text = tk.Text(content_frame, font=('Consolas', 10), bg='#2d2d2d',
+                           fg='#ffffff', bd=0, padx=15, pady=15, wrap=tk.WORD)
+        help_text.pack(fill=tk.BOTH, expand=True)
+        
+        help_content = """Available Variables (use with curly braces):
+
+{app_name}     - Name of the target application
+{timestamp}    - Full date and time (YYYY-MM-DD HH:MM:SS)
+{date}         - Date only (YYYY-MM-DD)  
+{time}         - Time only (HH:MM:SS)
+{day}          - Day of the week (Monday, Tuesday, etc.)
+{month}        - Month name (January, February, etc.)
+{year}         - Year (YYYY)
+
+Examples:
+
+"Screenshot of {app_name} taken at {time}"
+→ "Screenshot of notepad taken at 14:30:25"
+
+"{app_name} capture on {day}"
+→ "notepad capture on Monday"
+
+"Daily {app_name} screenshot - {date}"
+→ "Daily notepad screenshot - 2024-01-15"
+
+"Custom message without variables"
+→ "Custom message without variables"
+
+Leave empty for no message (image only).
+"""
+        
+        help_text.insert(tk.END, help_content)
+        help_text.config(state=tk.DISABLED)
+        
+        
+        close_btn = tk.Button(content_frame, text="Close", font=('Segoe UI', 11, 'bold'),
+                             bg='#3b82f6', fg='white', bd=0, padx=30, pady=10,
+                             cursor='hand2', command=help_window.destroy)
+        close_btn.pack(pady=(10, 0))
+    
+    def update_message_preview(self, *args):
+        """Update the message preview"""
+        try:
+            
+            old_message = self.bot.custom_message
+            self.bot.custom_message = self.message_var.get()
+            preview = self.bot.format_message()
+            self.bot.custom_message = old_message
+            
+            if preview and len(preview) > 80:
+                preview = preview[:77] + "..."
+            
+            self.message_preview.config(text=f"Preview: {preview}" if preview else "Preview: (no message)")
+        except Exception:
+            self.message_preview.config(text="Preview: (invalid format)")
+    
+    def save_config_animated(self):
+        """Save configuration with button animation"""
+        self.animate_button_click(self.save_btn)
+        self.update_config()
+        self.bot.save_config()
+        self.log_message_colored("Configuration saved successfully!", 'success')
+        self.show_notification("Success", "Configuration saved!", 'success')
+    
     def create_card(self, parent, title):
         """Create a modern card with title"""
         card_frame = tk.Frame(parent, bg='#2d2d2d', relief='flat', bd=1)
         
-        # Card header
+        
         header = tk.Frame(card_frame, bg='#374151', height=50)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
@@ -878,6 +1147,8 @@ class ScreenshotBotGUI:
                 widget.config(bg='#dc2626')
             elif current_bg == '#6366f1':
                 widget.config(bg='#4f46e5')
+            elif current_bg == '#6b7280':
+                widget.config(bg='#4b5563')
         else:
             current_bg = widget.cget('bg')
             if current_bg == '#2563eb':
@@ -888,6 +1159,8 @@ class ScreenshotBotGUI:
                 widget.config(bg='#ef4444')
             elif current_bg == '#4f46e5':
                 widget.config(bg='#6366f1')
+            elif current_bg == '#4b5563':
+                widget.config(bg='#6b7280')
     
     def show_applications(self):
         """Show running applications in a modern popup"""
@@ -899,20 +1172,20 @@ class ScreenshotBotGUI:
         app_window.configure(bg='#1e1e1e')
         app_window.resizable(False, False)
         
-        # Center the window
+        
         app_window.transient(self.root)
         app_window.grab_set()
         
-        # Header
+        
         header = tk.Frame(app_window, bg='#374151', height=60)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
         
-        title = tk.Label(header, text="🔍 Select Target Application",
+        title = tk.Label(header, text="Select Target Application",
                         font=('Segoe UI', 16, 'bold'), fg='#ffffff', bg='#374151')
         title.pack(expand=True)
         
-        # Search frame
+        
         search_frame = tk.Frame(app_window, bg='#1e1e1e')
         search_frame.pack(fill=tk.X, padx=20, pady=20)
         
@@ -927,11 +1200,11 @@ class ScreenshotBotGUI:
                                insertbackground='#ffffff')
         search_entry.pack(fill=tk.X, ipady=8, pady=(5, 0))
         
-        # Apps list frame
+        
         list_frame = tk.Frame(app_window, bg='#1e1e1e')
         list_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
         
-        # Custom listbox with modern styling
+        
         listbox_frame = tk.Frame(list_frame, bg='#2d2d2d')
         listbox_frame.pack(fill=tk.BOTH, expand=True)
         
@@ -945,10 +1218,10 @@ class ScreenshotBotGUI:
         listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=listbox.yview)
         
-        # Populate list
+        
         all_apps = apps[:]
         for app in all_apps:
-            listbox.insert(tk.END, f"📱 {app}")
+            listbox.insert(tk.END, app)
         
         def filter_apps():
             """Filter applications based on search"""
@@ -956,7 +1229,7 @@ class ScreenshotBotGUI:
             listbox.delete(0, tk.END)
             for app in all_apps:
                 if query in app.lower():
-                    listbox.insert(tk.END, f"📱 {app}")
+                    listbox.insert(tk.END, app)
         
         search_var.trace('w', lambda *args: filter_apps())
         
@@ -964,10 +1237,10 @@ class ScreenshotBotGUI:
             """Select application with animation"""
             selection = listbox.curselection()
             if selection:
-                selected_app = listbox.get(selection[0]).replace("📱 ", "")
+                selected_app = listbox.get(selection[0])
                 self.app_var.set(selected_app.lower())
                 
-                # Animate selection
+                
                 for i in range(3):
                     listbox.config(selectbackground='#22c55e')
                     app_window.update()
@@ -978,17 +1251,17 @@ class ScreenshotBotGUI:
                 
                 app_window.destroy()
         
-        # Button frame
+        
         btn_frame = tk.Frame(app_window, bg='#1e1e1e')
         btn_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
         
-        select_btn = tk.Button(btn_frame, text="✅ Select Application",
+        select_btn = tk.Button(btn_frame, text="Select Application",
                               font=('Segoe UI', 11, 'bold'), bg='#22c55e', fg='white',
                               bd=0, padx=30, pady=10, cursor='hand2',
                               command=select_app)
         select_btn.pack()
         
-        # Double click to select
+        
         listbox.bind('<Double-Button-1>', lambda e: select_app())
     
     def take_screenshot_animated(self):
@@ -1031,16 +1304,16 @@ class ScreenshotBotGUI:
         notification.configure(bg=self.status_colors.get(type_, '#3b82f6'))
         notification.resizable(False, False)
         
-        # Position in top-right corner
+        
         notification.geometry("+{}+{}".format(
             self.root.winfo_x() + self.root.winfo_width() - 420,
             self.root.winfo_y() + 50
         ))
         
-        # Remove window decorations
+        
         notification.overrideredirect(True)
         
-        # Content
+        
         content_frame = tk.Frame(notification, bg=self.status_colors.get(type_, '#3b82f6'))
         content_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
@@ -1053,24 +1326,26 @@ class ScreenshotBotGUI:
                             wraplength=350)
         msg_label.pack(anchor=tk.W, pady=(5, 0))
         
-        # Auto-close after 3 seconds
+        
         self.root.after(3000, notification.destroy)
     
     def update_config(self):
         """Update bot configuration from GUI"""
         self.bot.webhook_url = self.webhook_var.get().strip()
         self.bot.app_name = self.app_var.get().strip().lower()
+        self.bot.custom_message = self.message_var.get().strip()
         try:
             self.bot.interval = int(self.interval_var.get())
         except ValueError:
             self.bot.interval = 60
+            self.interval_var.set("60")
         self.bot.delete_after_send = self.delete_var.get()
     
     def log_message_colored(self, message, type_='info'):
         """Add colored message to status log with animation"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         
-        # Insert with colors
+        
         self.status_text.insert(tk.END, f"[{timestamp}] ", "timestamp")
         
         if type_ == 'success':
@@ -1078,14 +1353,14 @@ class ScreenshotBotGUI:
         elif type_ == 'error':
             self.status_text.insert(tk.END, "❌ ", "error")
         elif type_ == 'warning':
-            self.status_text.insert(tk.END, "⚠️ ", "warning")
+            self.status_text.insert(tk.END, "⚠ ", "warning")
         else:
-            self.status_text.insert(tk.END, "ℹ️ ", "info")
+            self.status_text.insert(tk.END, "ℹ ", "info")
         
         self.status_text.insert(tk.END, f"{message}\n")
         self.status_text.see(tk.END)
         
-        # Animate scroll to bottom
+        
         self.animate_scroll_to_bottom()
     
     def animate_scroll_to_bottom(self):
@@ -1098,21 +1373,21 @@ class ScreenshotBotGUI:
     
     def update_status(self):
         """Update status display with animations"""
-        webhook_status = "✅" if self.bot.webhook_url else "❌"
-        app_status = "✅" if self.bot.app_name else "❌"
+        webhook_status = "✓" if self.bot.webhook_url else "✗"
+        app_status = "✓" if self.bot.app_name else "✗"
         
         if self.bot.running:
             self.status_indicator.config(fg='#22c55e', text="●")
-            self.status_text_label.config(text="🔄 Monitoring Active", fg='#22c55e')
-            self.start_btn.config(state='disabled', text="▶️ Running...")
+            self.status_text_label.config(text="Monitoring Active", fg='#22c55e')
+            self.start_btn.config(state='disabled', text="Running...")
             self.stop_btn.config(state='normal')
         else:
             self.status_indicator.config(fg='#ef4444', text="●")
-            self.status_text_label.config(text="⏸️ Stopped", fg='#ef4444')
-            self.start_btn.config(state='normal', text="▶️ Start Monitoring")
+            self.status_text_label.config(text="Stopped", fg='#ef4444')
+            self.start_btn.config(state='normal', text="Start Monitoring")
             self.stop_btn.config(state='disabled')
         
-        # Update window title with status
+        
         status = f"Webhook: {webhook_status} | App: {app_status} | Interval: {self.bot.interval}s"
         self.root.title(f"Screenshot Discord Bot - {status}")
     
@@ -1123,12 +1398,16 @@ class ScreenshotBotGUI:
     
     def run(self):
         """Start the GUI with fade-in animation"""
-        # Start with window slightly transparent effect simulation
+        
         self.root.update_idletasks()
         
-        # Welcome message
-        self.root.after(1000, lambda: self.log_message_colored("Welcome to Screenshot Discord Bot! 🎉", 'info'))
-        self.root.after(2000, lambda: self.log_message_colored("Configure your settings and start monitoring", 'info'))
+        
+        self.root.after(1000, lambda: self.log_message_colored("Welcome to Screenshot Discord Bot!", 'info'))
+        if self.config_found:
+            self.root.after(2000, lambda: self.log_message_colored("Config found, successfully loaded", 'success'))
+        else:
+            self.root.after(2000, lambda: self.log_message_colored("No previous configuration found. creating cfg.json", 'error'))
+            self.root.after(3000, lambda: self.log_message_colored("successfully created cfg file", 'success'))
         
         self.root.mainloop()
 
@@ -1150,6 +1429,7 @@ def print_current_config(bot):
     print(f"\n--- Current Configuration ---")
     print(f"Webhook URL: {'✓ Set' if bot.webhook_url else '✗ Not set'}")
     print(f"Application: {bot.app_name if bot.app_name else '✗ Not set'}")
+    print(f"Custom Message: {bot.custom_message if bot.custom_message else '✗ No message'}")
     print(f"Interval: {bot.interval} seconds")
     print(f"Delete after send: {'Yes' if bot.delete_after_send else 'No'}")
     print(f"Status: {'🟢 Running' if bot.running else '🔴 Stopped'}")
@@ -1168,15 +1448,17 @@ def console_menu():
         print("1. Set Discord Webhook URL")
         print("2. Set Application Name")
         print("3. List Running Applications")
-        print("4. Set Screenshot Interval")
-        print("5. Toggle Delete After Send")
-        print("6. Take Single Screenshot")
-        print("7. Start Continuous Monitoring")
-        print("8. Stop Monitoring")
-        print("9. Exit")
+        print("4. Set Custom Message")
+        print("5. Set Screenshot Interval")
+        print("6. Toggle Delete After Send")
+        print("7. Take Single Screenshot")
+        print("8. Start Continuous Monitoring")
+        print("9. Stop Monitoring")
+        print("10. Save Configuration")
+        print("11. Exit")
         
         try:
-            choice = input("\nEnter your choice (1-9): ").strip()
+            choice = input("\nEnter your choice (1-11): ").strip()
             
             if choice == "1":
                 url = input("Enter Discord webhook URL: ").strip()
@@ -1206,6 +1488,20 @@ def console_menu():
                 input("\nPress Enter to continue...")
                 
             elif choice == "4":
+                print("\n--- Custom Message Setup ---")
+                print("Available variables: {app_name}, {timestamp}, {date}, {time}, {day}, {month}, {year}")
+                print("Leave empty for no message (image only)")
+                print(f"Current: {bot.custom_message}")
+                message = input("Enter custom message: ").strip()
+                bot.custom_message = message
+                if message:
+                    print(f"✓ Custom message set!")
+                    print(f"Preview: {bot.format_message()}")
+                else:
+                    print("✓ Message cleared - will send image only")
+                input("\nPress Enter to continue...")
+                
+            elif choice == "5":
                 try:
                     interval = int(input(f"Enter interval in seconds (current: {bot.interval}): ").strip())
                     if interval > 0:
@@ -1217,42 +1513,51 @@ def console_menu():
                     print("✗ Please enter a valid number!")
                 input("\nPress Enter to continue...")
                 
-            elif choice == "5":
+            elif choice == "6":
                 bot.delete_after_send = not bot.delete_after_send
                 status = "enabled" if bot.delete_after_send else "disabled"
                 print(f"✓ Delete after send {status}")
                 input("\nPress Enter to continue...")
                 
-            elif choice == "6":
+            elif choice == "7":
                 success, message = bot.take_single_screenshot()
                 print(message)
                 input("\nPress Enter to continue...")
                 
-            elif choice == "7":
+            elif choice == "8":
                 success, message = bot.start_monitoring()
                 print(message)
                 input("\nPress Enter to continue...")
                 
-            elif choice == "8":
+            elif choice == "9":
                 success, message = bot.stop_monitoring()
                 print(message)
                 input("\nPress Enter to continue...")
                 
-            elif choice == "9":
+            elif choice == "10":
+                bot.save_config()
+                print("✓ Configuration saved successfully!")
+                input("\nPress Enter to continue...")
+                
+            elif choice == "11":
                 if bot.running:
                     print("Stopping monitoring...")
                     bot.stop_monitoring()
+                print("Saving configuration...")
+                bot.save_config()
                 print("Goodbye!")
                 break
                 
             else:
-                print("✗ Invalid choice! Please enter 1-9.")
+                print("✗ Invalid choice! Please enter 1-11.")
                 input("\nPress Enter to continue...")
                 
         except KeyboardInterrupt:
             if bot.running:
                 print("\n\nStopping monitoring...")
                 bot.stop_monitoring()
+            print("Saving configuration...")
+            bot.save_config()
             print("Goodbye!")
             break
         except Exception as e:
@@ -1300,5 +1605,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
