@@ -632,7 +632,7 @@ class ScreenshotBotGUI:
         self.subtitle_label.pack()
         
         # Start typewriter animation
-        self.typewriter_text = "Made By Heavenly <3"
+        self.typewriter_text = "wraith stinks btw"
         self.typewriter_index = 0
         self.root.after(2000, self.animate_typewriter)
     
@@ -1300,4 +1300,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
